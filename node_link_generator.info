@@ -1,0 +1,11 @@
+name = Node Link Generator
+description = Mass generates menu links for the selected nodes.
+
+; Information added by drupal.org packaging script on 2013-08-17
+version = "7.x-1.0-alpha"
+core = "7.x"
+dependencies[] = node
+dependencies[] = field
+project = "node_link_generator"
+datestamp = "1376703448"
+

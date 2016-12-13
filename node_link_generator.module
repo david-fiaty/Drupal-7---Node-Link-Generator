@@ -1,0 +1,268 @@
+<?php
+/**
+ * @file
+ * Node Link Generator primary module file.
+ */
+
+/**
+ * Implements hook_node_operations().
+ */
+function node_link_generator_node_operations() {
+  // Define a new content action
+  $operations['node_link_generator_generate'] = array(
+  'label' => t('Generate menu links for the selected content'),
+  'callback' => '_node_link_generator_redirect',
+  'callback arguments' => array('bulkupdate', array('message' => TRUE)),
+  );
+  
+  return $operations;
+}
+
+/**
+ * Implements hook_menu().
+ */
+function node_link_generator_menu() {
+  $items['admin/node_link_generator/form'] = array(
+  'title' => t('Node Link Generator > Select a menu'),
+  'access arguments' => array('administer content'), 
+  'page callback' => '_node_link_generator_parameters',
+  'page arguments' => array(),
+  'type' => MENU_CALLBACK
+  );
+	
+  return $items;
+}
+
+/**
+ * Redirect to the generator form page
+ *
+ * This function redirects the user to the generator form page.
+ *
+ * @param $nids
+ *   The node ids to process.
+ *
+ * @param $op
+ *   The node operation selected.
+ *
+ * @param $options
+ *   The node operation options.
+ */
+function _node_link_generator_redirect (array $nids, $op, array $options = array()) {
+  $_SESSION['node_link_generator_nids'] = $nids;
+  drupal_goto('admin/node_link_generator/form');
+}
+
+/**
+ * Render the parameters form
+ *
+ * This function renders the form for the links generator.
+ */
+function _node_link_generator_parameters() {
+  return drupal_get_form('_node_link_generator_parameters_form');
+}
+
+/**
+ * Build the parameters form
+ *
+ * This function builds the form for the links generator.
+ */
+function _node_link_generator_parameters_form() {
+  // Menu selector checkboxes
+  $form['node_link_generator_menus'] = array(
+  '#type' => 'checkboxes',
+  '#options' => menu_get_menus($all = TRUE),
+  '#required' => TRUE,
+  '#multiple' => TRUE,
+  );
+  
+  // Submit button
+  $form['submit_button'] = array(
+  '#type' => 'submit',
+  '#value' => t('Generate links'),
+  '#weight' => 100,
+  );
+
+  // Form validation function
+  $form['#validate'][] = '_node_link_generator_form_validate';
+  
+  // Form submit function
+  $form['#submit'][] ='_node_link_generator_form_submit';
+
+  return $form;
+}
+
+/**
+ * Validate the generator parameters form
+ *
+ * This function validates the generator parameters form.
+ *
+ * @param $form
+ *   The form values.
+ *
+ * @param $form_state
+ *   The form state values.
+ */
+function _node_link_generator_form_validate($form, &$form_state) {
+  // If no menu item selected, return an error
+  if (!isset($form['node_link_generator_menus']['#value']) || count($form['node_link_generator_menus']['#value']) == 0) {
+    form_set_error('title', t('Please select at least one menu to recieve the created node links.'));
+  }
+}
+
+/**
+ * Submit the generator parameters form
+ *
+ * This function submits the generator parameters form.
+ *
+ * @param $form
+ *   The form values.
+ *
+ * @param $form_state
+ *   The form state values.
+ */
+function _node_link_generator_form_submit($form, &$form_state) {
+  // Prepare the batch operation
+  $function = '_node_link_generator_create_links';
+
+  // Reset counter for debug information
+  $_SESSION['http_request_count'] = 0;
+
+  // Execute the batch function
+  $batch = $function($form);
+  batch_set($batch);
+}
+
+/**
+ * Create links for the selected nodes
+ *
+ * This function triggers the node link creation process.
+ *
+ * @param $form
+ *   The form values.
+ */
+function _node_link_generator_create_links($form) {
+  // Get the target menus
+  $menus = $form['node_link_generator_menus']['#value'];
+
+  // Loop through the selected menus
+  foreach ($menus as $menu_name) {
+  	// Create links for each menu
+    $operations[] = array('_node_link_generator_create_menu_links', array($menu_name));
+  }
+
+  // Define a batch operation
+  $batch = array(
+  'title' => t('Generate menu links'),
+  'operations' => $operations,
+  'finished' => '_node_link_generator_finished',
+  'init_message' => t('Operation in progress...'),
+  'progress_message' => t('Task @current/@total'),
+  'error_message' => t('An error has occurred please try again.'),
+  );
+
+  return $batch;
+}
+
+/**
+ * Create nodes links for a single menu
+ *
+ * This function creates links for a single menu.
+ *
+ * @param $menu_name
+ *   The name of the target menu.
+ *
+ * @param $context
+ *   The batch operations context.
+ */
+function _node_link_generator_create_menu_links($menu_name, &$context) {
+  // Get the target nids
+  $nids = $_SESSION['node_link_generator_nids'];
+
+  // Update the progress context message
+  $context['message'] = t('Creating links for menu') . ' ' . $menu_name;
+	
+  // Update the menu info
+  $context['results']['menus'][] = $menu_name;
+
+  // Start the generation loop
+  $i = 0;
+  foreach ($nids as $nid) {
+	
+    // Load the node
+    $node = node_load($nid);
+
+    //progress context results
+    $context['results'][] = 'nid' . $nid;
+
+    //update the node count
+    $context['results']['nids'][] = $nid;
+
+    // Create the link item
+    $item = array(
+    'link_path' => 'node/' . $nid,
+    'link_title' => $node->title,
+    'menu_name' => str_replace('-', '_', $menu_name), //todo - get real link machine name
+    'weight' => $i,
+    'expanded' => TRUE, //todo - add extra menu parameters
+    );      
+      
+    // Save the record if the nid is valid
+    if ((int) $node->nid > 0) {  
+      menu_link_save($item);
+    }
+		
+	// Increment the counted
+    $i++;
+  }
+
+  // Slow down the process for visibility
+  sleep(1);
+
+  // Update the batch operations progress
+  _node_link_generator_update_http_requests();
+}
+
+/**
+ * Batch operation finished
+ *
+ * This function displays a message after the batch operation ends.
+ *
+ * @param $success
+ *   The batch status.
+ *
+ * @param $results
+ *   The batch results array.
+ *
+ * @param $operations
+ *   The batch operations array.
+ */
+function _node_link_generator_finished($success, $results, $operations) {
+  // Test the results
+  if ($success) {
+    drupal_set_message(t('Generated @count_nids node links in @count_menus menu(s).', array('@count_nids' => count($results['nids']), '@count_menus' => count($results['menus']))));
+  }
+  else {
+    $error_operation = reset($operations);
+    drupal_set_message(t('An error occurred while processing @operation with arguments : @args', array('@operation' => $error_operation[0], '@args' => print_r($error_operation[0], TRUE))));
+  }
+  
+  // Redirect to the content admin page 
+  drupal_goto('admin/content');
+}
+
+/**
+ * Utility function to increment HTTP requests in a session variable.
+ */
+function _node_link_generator_update_http_requests() {
+  $_SESSION['http_request_count']++;
+}
+
+/**
+ * Utility function to count the HTTP requests in a session variable.
+ *
+ * @return int
+ *   Number of requests.
+ */
+function _node_link_generator_get_http_requests() {
+  return !empty($_SESSION['http_request_count']) ? $_SESSION['http_request_count'] : 0;
+}
